@@ -424,3 +424,59 @@ While the target of our operation in the previous cell was defined as a streamin
 This pattern ensures that if any updates arrive out of order, downstream results can be properly recomputed to reflect updates. It also ensures that when records are deleted from a source table, these values are no longer reflected in tables later in the pipeline.
 
 Below, we define a simple aggregate query to create a live table from the data in the **`customers_silver`** table.
+
+```python
+@dlt.table(
+    comment="Total active customers per state")
+def customer_counts_state():
+    return (
+        dlt.read("customers_silver")
+            .groupBy("state")
+            .agg( 
+                F.count("*").alias("customer_count"), 
+                F.first(F.current_timestamp()).alias("updated_at")
+            )
+    )
+```
+
+## DLT Views
+
+The query below defines a DLT view by using the **`@dlt.view`** decorator.
+
+Views in DLT differ from persisted tables, and can also inherit streaming execution from the function they decorate.
+
+Views have the same update guarantees as live tables, but the results of queries are not stored to disk.
+
+Unlike views used elsewhere in Databricks, __DLT views are not persisted to the metastore, meaning that they can only be referenced from within the DLT pipeline they are a part of. (This is similar scoping to DataFrames in Databricks notebooks.)__
+
+Views can still be used to enforce data quality, and metrics for views will be collected and reported as they would be for tables.
+
+## Joins and Referencing Tables Across Notebook Libraries
+
+The code we've reviewed thus far has shown 2 source datasets propagating through a series of steps in separate notebooks.
+
+DLT supports scheduling multiple notebooks as part of a single DLT Pipeline configuration. You can edit existing DLT pipelines to add additional notebooks.
+
+Within a DLT Pipeline, code in any notebook library can reference tables and views created in any other notebook library.
+
+Essentially, we can think of the scope of the database referenced by the **`LIVE`** keyword to be at the DLT Pipeline level, rather than the individual notebook.
+
+In the query below, we create a new view by joining the silver tables from our **`orders`** and **`customers`** datasets. Note that this view is not defined as streaming; as such, we will always capture the current valid **`email`** for each customer, and **will automatically drop records for customers after they've been deleted from the **`customers_silver`** table.**
+
+```python
+@dlt.view
+def subscribed_order_emails_v():
+    return (
+        dlt.read("orders_silver").filter("notifications = 'Y'").alias("a")
+            .join(
+                dlt.read("customers_silver").alias("b"), 
+                on="customer_id"
+            ).select(
+                "a.customer_id", 
+                "a.order_id", 
+                "b.email"
+            )
+    )
+```
+
+
